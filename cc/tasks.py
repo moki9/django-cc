@@ -21,19 +21,29 @@ logger = get_task_logger(__name__)
 @shared_task(throws=(socket_error,))
 @transaction.atomic
 def query_transactions(ticker=None):
+    logger.info("Execute Query Transactions")
     if not ticker:
+        logger.warn("No ticker found. Performing Currency lookup.")
         for c in Currency.objects.all():
+            logger.info("Deffered Query Transactions: {}".format(c.ticker))
             query_transactions.delay(c.ticker)
         return
 
+    logger.info("Ticker found: {}".format(ticker))
     currency = Currency.objects.select_for_update().get(ticker=ticker)
     coin = AuthServiceProxy(currency.api_url)
+    logger.info("RPC Call to {}".format(currency.api_url))
     current_block = coin.getblockcount()
+    logger.info("Current Block: {}".format(current_block))
     processed_transactions = []
 
     block_hash = coin.getblockhash(currency.last_block)
-    transactions = coin.listsinceblock(block_hash)['transactions']
+    logger.info("Block Hash: {}".format(block_hash))
+    blocklist = coin.listsinceblock(block_hash)
+    logger.info("Block List since {0} : {1}".format(block_hash, blocklist))
+    transactions = blocklist['transactions']
 
+    logger.info("Transactions: {}".format(transactions))
     for tx in transactions:
         if tx['txid'] in processed_transactions:
             continue
@@ -41,6 +51,7 @@ def query_transactions(ticker=None):
         if tx['category'] not in ('receive', 'generate', 'immature'):
             continue
 
+        logger.info("Processing Transactions: {}".format(tx))
         process_deposite_transaction(tx, ticker)
         processed_transactions.append(tx['txid'])
 
@@ -48,6 +59,7 @@ def query_transactions(ticker=None):
     currency.save()
 
     for tx in Transaction.objects.filter(processed=False, currency=currency):
+        logger.log("Querying Tx: {0} -> {1}".format(ticker, tx.txid))
         query_transaction(ticker, tx.txid)
 
 
