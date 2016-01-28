@@ -56,6 +56,7 @@ def query_transactions(ticker=None):
         processed_transactions.append(tx['txid'])
 
     currency.last_block = current_block
+    log.info("Latest block: {}".format(current_block))
     currency.save()
 
     for tx in Transaction.objects.filter(processed=False, currency=currency):
@@ -65,19 +66,25 @@ def query_transactions(ticker=None):
 
 @transaction.atomic
 def process_deposite_transaction(txdict, ticker):
+    logger.info("Execute Process Deposit Transaction")
     if txdict['category'] not in ('receive', 'generate', 'immature'):
+        logger.warn("Invalid TX: {}".format(txdict))
         return
 
     try:
         address = Address.objects.select_for_update().get(address=txdict['address'])
+        logger.info("Got Address object for: {}".format(txdict['address']))
     except Address.DoesNotExist:
+        logger.warn("No Local Address found for: {}".format(txdict['address']))
         return
 
     currency = Currency.objects.get(ticker=ticker)
 
     try:
+        logger.info("Local Wallet lookup")
         wallet = Wallet.objects.select_for_update().get(addresses=address)
     except Wallet.DoesNotExist:
+        logger.warn("No Local Wallet found, creating unknown wallet..")
         wallet, created = Wallet.objects.select_for_update().get_or_create(
             currency=currency,
             label='_unknown_wallet'
@@ -88,10 +95,13 @@ def process_deposite_transaction(txdict, ticker):
     tx, created = Transaction.objects.select_for_update().get_or_create(txid=txdict['txid'], address=txdict['address'], currency=currency)
 
     if tx.processed:
+        logger.info("Transaction processed: {}".format(txdict['txid']))
         return
 
     if created:
+        logger.info("New TX: {}".format(txdict['txid']))
         if txdict['confirmations'] >= settings.CC_CONFIRMATIONS and txdict['category'] != 'immature':
+            logger.info("TX Confirmed: {}".format(txdict['txid']))
             Operation.objects.create(
                 wallet=wallet,
                 balance=txdict['amount'],
@@ -100,8 +110,10 @@ def process_deposite_transaction(txdict, ticker):
             )
             wallet.balance += txdict['amount']
             wallet.save()
+            logger.info("Updated Wallet:{0} Balance: {1}".format(wallet.label, wallet.balance))
             tx.processed = True
         else:
+            logger.info("TX Unconfirmed: {}".format(txdict['txid']))
             Operation.objects.create(
                 wallet=wallet,
                 unconfirmed=txdict['amount'],
@@ -113,6 +125,7 @@ def process_deposite_transaction(txdict, ticker):
 
     else:
         if txdict['confirmations'] >= settings.CC_CONFIRMATIONS and txdict['category'] != 'immature':
+            logger.info("TX Confirmed: {}".format(txdict['txid']))
             Operation.objects.create(
                 wallet=wallet,
                 unconfirmed=-txdict['amount'],
@@ -122,6 +135,7 @@ def process_deposite_transaction(txdict, ticker):
             )
             wallet.unconfirmed -= txdict['amount']
             wallet.balance += txdict['amount']
+            logger.info("Updated Wallet:{0} Balance: {1}".format(wallet.label, wallet.balance))
             wallet.save()
             tx.processed = True
 
@@ -132,9 +146,11 @@ def process_deposite_transaction(txdict, ticker):
 @shared_task(throws=(socket_error,))
 @transaction.atomic
 def query_transaction(ticker, txid):
+    logger.info("Execute Query Transaction")
     currency = Currency.objects.select_for_update().get(ticker=ticker)
     coin = AuthServiceProxy(currency.api_url)
     for txdict in normalise_txifno(coin.gettransaction(txid)):
+        logger.info("Process deposit TX: {}".format(txdict))
         process_deposite_transaction(txdict, ticker)
 
 
@@ -166,35 +182,45 @@ def refill_addresses_queue():
 @shared_task(throws=(socket_error,))
 @transaction.atomic
 def process_withdraw_transactions(ticker=None):
+    logger.info("Execute Process Withdraw Transaction")
     if not ticker:
+        logger.warn("No ticker found. Performing Currency lookup.")
         for c in Currency.objects.all():
+            logger.info("Deffered Process Withdraw Transaction: {}".format(c.ticker))
             process_withdraw_transactions.delay(c.ticker)
         return
 
     currency = Currency.objects.select_for_update().get(ticker=ticker)
     coin = AuthServiceProxy(currency.api_url)
 
+    logger.info("Withdraw Transaction Lookup")
     wtxs = WithdrawTransaction.objects.select_for_update().select_related('wallet').filter(currency=currency, txid=None).order_by('wallet')
 
     transaction_hash = {}
     for tx in wtxs:
+        logger.info("Updating Transaction Hash Amount for TX: {}".format(tx.txid))
         if tx.address in transaction_hash:
             transaction_hash[tx.address] += tx.amount
         else:
             transaction_hash[tx.address] = tx.amount
 
+        logger.info("Updated Transaction Amount: {}".format(transaction_hash[tx.address]))
+
     if currency.dust > Decimal('0'):
+        logger.info("Processing Transaction Dust")
         for address, amount in transaction_hash.items():
             if amount < currency.dust:
                 wtxs = wtxs.exclude(currency=currency, address=address)
                 del transaction_hash[address]
 
     if not transaction_hash:
+        logger.warn("No Transaction Hash")
         return
 
     txid = coin.sendmany(settings.CC_ACCOUNT, transaction_hash)
 
     if not txid:
+        logger.warn("No Transaction ID")
         return
 
     fee = coin.gettransaction(txid).get('fee', 0) * -1
@@ -202,6 +228,8 @@ def process_withdraw_transactions(ticker=None):
         fee_per_tx = 0
     else:
         fee_per_tx = (fee / len(wtxs))
+
+    logger.info("Transaction Fee: {}".format(fee_per_tx))
 
     fee_hash = defaultdict(lambda : {'fee': Decimal("0"), 'amount': Decimal('0')})
 
@@ -218,9 +246,11 @@ def process_withdraw_transactions(ticker=None):
             reason=tx
         )
 
+        logger.info("Updating Wallet balance")
         wallet = Wallet.objects.get(id=tx.wallet.id)
         wallet.balance -= data['fee']
         wallet.holded -= data['amount']
+        logger.info("Wallet<{0}> Balance: {1} Holded {2}".format(wallet.label, wallet.balance, wallet.holded))
         wallet.save()
 
     wtxs.update(txid=txid, fee=fee_per_tx)
