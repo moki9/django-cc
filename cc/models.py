@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 from decimal import Decimal
+import logging
+logger = logging.getLogger("eventLogger")
 
 from bitcoinaddress import validate
 from django.db import models
@@ -80,8 +82,8 @@ class Wallet(models.Model):
         deposite_wallet.save()
 
     def withdraw_to_address(self, address, amount, description=""):
-        if not validate(address, magicbyte=self.currency.magicbyte.split(',')):
-            raise ValueError('Invalid address')
+        #if not validate(address, magicbyte=self.currency.magicbyte.split(',')):
+        #    raise ValueError('Invalid address')
 
         if amount < 0:
             raise ValueError('Invalid amount')
