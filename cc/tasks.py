@@ -99,7 +99,7 @@ def process_deposite_transaction(txdict, ticker):
         return
 
     if created:
-        logger.info("New TX: {}".format(txdict['txid']))
+        logger.info("Newly created TX: {}".format(txdict['txid']))
         if txdict['confirmations'] >= settings.CC_CONFIRMATIONS and txdict['category'] != 'immature':
             logger.info("TX Confirmed: {}".format(txdict['txid']))
             Operation.objects.create(
@@ -124,6 +124,7 @@ def process_deposite_transaction(txdict, ticker):
             wallet.save()
 
     else:
+        logger.info("Previously Created TX: {}".format(txdict['txid']))
         if txdict['confirmations'] >= settings.CC_CONFIRMATIONS and txdict['category'] != 'immature':
             logger.info("TX Confirmed: {}".format(txdict['txid']))
             Operation.objects.create(
@@ -224,14 +225,16 @@ def process_withdraw_transactions(ticker=None):
         return
 
     fee = coin.gettransaction(txid).get('fee', 0) * -1
+    logger.info("Transaction Fee: {}".format(fee))
     if not fee:
         fee_per_tx = 0
     else:
         fee_per_tx = (fee / len(wtxs))
 
-    logger.info("Transaction Fee: {}".format(fee_per_tx))
+    logger.info("Transaction Fee Per TX: {}".format(fee_per_tx))
 
     fee_hash = defaultdict(lambda : {'fee': Decimal("0"), 'amount': Decimal('0')})
+    logger.info("Fee Hash: {}".format(fee_hash))
 
     for tx in wtxs:
         fee_hash[tx.wallet]['fee'] += fee_per_tx
