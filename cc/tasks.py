@@ -60,7 +60,7 @@ def query_transactions(ticker=None):
     currency.save()
 
     for tx in Transaction.objects.filter(processed=False, currency=currency):
-        logger.log("Querying Tx: {0} -> {1}".format(ticker, tx.txid))
+        logger.info("Querying Tx: {0} -> {1}".format(ticker, tx.txid))
         query_transaction(ticker, tx.txid)
 
 
@@ -142,6 +142,7 @@ def process_deposite_transaction(txdict, ticker):
 
     post_deposite.send(sender=process_deposite_transaction, instance=wallet)
     tx.save()
+    logger.info("Transaction saved: {0} ".format(tx))
 
 
 @shared_task(throws=(socket_error,))
